@@ -1,7 +1,29 @@
-{
+﻿{
   "pack": {
-    "min_format": [88, 0],
-    "max_format": [88, 0],
-    "description": "蠻荒逆境專用材質包｜Minecraft 26.1.2"
+    "pack_format": 15,
+    "supported_formats": [15, 32767],
+    "description": "[蠻荒逆境] 專用材質包（怪物＋村民綠寶石武器）"
+  },
+  "overlays": {
+    "entries": [
+      {
+        "min_format": 15,
+        "max_format": 32767,
+        "formats": {
+          "min_inclusive": 15,
+          "max_inclusive": 32767
+        },
+        "directory": "modelengine_26_2"
+      },
+      {
+        "min_format": 84,
+        "max_format": 32767,
+        "formats": {
+          "min_inclusive": 84,
+          "max_inclusive": 32767
+        },
+        "directory": "modelengine_26_1"
+      }
+    ]
   }
 }
