@@ -16,7 +16,7 @@ if ([string]::IsNullOrWhiteSpace($SourceModelPath)) {
     $SourceModelPath = Join-Path 'D:\Users\User\Downloads\assets\minecraft\models\item' ("$([char]0x5315)$([char]0x9996)4.json")
 }
 if ([string]::IsNullOrWhiteSpace($LocalTestPackPath)) {
-    $LocalTestPackPath = Join-Path 'C:\Users\User\curseforge\minecraft\Instances\26.2\resourcepacks' ("$([char]0x883B)$([char]0x8352)$([char]0x9006)$([char]0x5883)-$([char]0x76DC)$([char]0x8CCA)$([char]0x5315)$([char]0x9996)$([char]0x6E2C)$([char]0x8A66)")
+    $LocalTestPackPath = Join-Path 'C:\Users\User\curseforge\minecraft\Instances\26.2\resourcepacks' ("$([char]0x883B)$([char]0x8352)$([char]0x9006)$([char]0x5883)-$([char]0x76DC)$([char]0x8CCA)$([char]0x982D)$([char]0x76EE)$([char]0x6750)$([char]0x8CEA)$([char]0x6E2C)$([char]0x8A66)")
 }
 
 $requiredEntries = @(
