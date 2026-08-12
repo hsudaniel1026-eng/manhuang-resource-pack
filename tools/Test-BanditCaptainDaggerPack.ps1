@@ -32,6 +32,8 @@ $baselineHashes = @{
     'assets/bandit/models/item/abominable_scythe.json' = '7efb0a5617969fae18a206b2c8b0c9de2b2a01658d050e0d95e7c5ecf3ff9cd8'
 }
 
+$requiredPackVersion = @(88, 0)
+
 function Get-EntryBytes {
     param([System.IO.Compression.ZipArchiveEntry]$Entry)
 
@@ -66,7 +68,15 @@ function Add-Failure {
     $script:failures.Add($Message)
 }
 
+function Test-FullPackVersion {
+    param($Value)
+
+    $values = @($Value)
+    return $values.Count -eq 2 -and [int]$values[0] -eq $requiredPackVersion[0] -and [int]$values[1] -eq $requiredPackVersion[1]
+}
+
 $failures = [System.Collections.Generic.List[string]]::new()
+$requiredArchiveHashes = @{}
 
 if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
     Add-Failure "Archive is missing: $ArchivePath"
@@ -74,6 +84,7 @@ if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
     $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $ArchivePath))
     try {
         $entries = @{}
+        $entryCounts = @{}
         foreach ($entry in $archive.Entries) {
             if ($entry.FullName -match '\\') {
                 Add-Failure "ZIP entry uses a backslash: $($entry.FullName)"
@@ -81,7 +92,18 @@ if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
             if ($entry.FullName.StartsWith('/')) {
                 Add-Failure "ZIP entry is rooted instead of archive-relative: $($entry.FullName)"
             }
+            if ($entryCounts.ContainsKey($entry.FullName)) {
+                $entryCounts[$entry.FullName]++
+            } else {
+                $entryCounts[$entry.FullName] = 1
+            }
             $entries[$entry.FullName] = $entry
+        }
+
+        foreach ($entryName in ($entryCounts.Keys | Sort-Object)) {
+            if ($entryCounts[$entryName] -gt 1) {
+                Add-Failure "ZIP contains duplicate entry ${entryName}: $($entryCounts[$entryName]) copies"
+            }
         }
 
         if (-not $entries.ContainsKey('pack.mcmeta')) {
@@ -94,6 +116,8 @@ if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
         foreach ($requiredEntry in $requiredEntries) {
             if (-not $entries.ContainsKey($requiredEntry)) {
                 Add-Failure "Missing required ZIP entry: $requiredEntry"
+            } else {
+                $requiredArchiveHashes[$requiredEntry] = Get-BytesHash (Get-EntryBytes $entries[$requiredEntry])
             }
         }
 
@@ -151,11 +175,47 @@ if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
 
 if (-not (Test-Path -LiteralPath (Join-Path $LocalTestPackPath 'pack.mcmeta') -PathType Leaf)) {
     Add-Failure "Local test pack is missing pack.mcmeta: $LocalTestPackPath"
+} else {
+    try {
+        $localPackMetadata = Get-Content -Raw -Encoding utf8 -LiteralPath (Join-Path $LocalTestPackPath 'pack.mcmeta') | ConvertFrom-Json
+        if ($null -eq $localPackMetadata.pack) {
+            Add-Failure 'Local test pack pack.mcmeta is missing the pack object'
+        } else {
+            $packProperties = @($localPackMetadata.pack.PSObject.Properties.Name)
+            if (-not ($packProperties -contains 'min_format') -or -not (Test-FullPackVersion $localPackMetadata.pack.min_format)) {
+                Add-Failure 'Local test pack min_format must be [88, 0] for Minecraft 26.2'
+            }
+            if (-not ($packProperties -contains 'max_format') -or -not (Test-FullPackVersion $localPackMetadata.pack.max_format)) {
+                Add-Failure 'Local test pack max_format must be [88, 0] for Minecraft 26.2'
+            }
+            foreach ($legacyField in @('pack_format', 'supported_formats')) {
+                if ($packProperties -contains $legacyField) {
+                    Add-Failure "Local test pack uses obsolete $legacyField instead of 26.2 min_format/max_format"
+                }
+            }
+        }
+    } catch {
+        Add-Failure "Local test pack pack.mcmeta is not valid JSON: $($_.Exception.Message)"
+    }
 }
 foreach ($requiredEntry in $requiredEntries) {
     $localFile = Join-Path $LocalTestPackPath ($requiredEntry -replace '/', '\\')
     if (-not (Test-Path -LiteralPath $localFile -PathType Leaf)) {
         Add-Failure "Local test pack is missing: $requiredEntry"
+        continue
+    }
+    if ($localFile.EndsWith('.json')) {
+        try {
+            Get-Content -Raw -Encoding utf8 -LiteralPath $localFile | ConvertFrom-Json | Out-Null
+        } catch {
+            Add-Failure "Local test pack JSON is invalid for ${requiredEntry}: $($_.Exception.Message)"
+        }
+    }
+    if ($requiredArchiveHashes.ContainsKey($requiredEntry)) {
+        $localHash = (Get-FileHash -LiteralPath $localFile -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($localHash -ne $requiredArchiveHashes[$requiredEntry]) {
+            Add-Failure "Local test pack content differs from ZIP for $requiredEntry"
+        }
     }
 }
 
