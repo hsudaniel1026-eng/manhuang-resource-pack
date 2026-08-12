@@ -65,6 +65,34 @@ Invoke-ExpectedFailure 'obsolete pack.mcmeta format' {
     & $validator -ArchivePath $ArchivePath -LocalTestPackPath $oldFormatPack
 }
 
+$stringVersionPack = Copy-LocalFixture 'string-version'
+[System.IO.File]::WriteAllText((Join-Path $stringVersionPack 'pack.mcmeta'), @'
+{
+  "pack": {
+    "min_format": ["88", "0"],
+    "max_format": ["88", "0"],
+    "description": "deliberately string version"
+  }
+}
+'@, $utf8NoBom)
+Invoke-ExpectedFailure 'string full-version elements' {
+    & $validator -ArchivePath $ArchivePath -LocalTestPackPath $stringVersionPack
+}
+
+$decimalVersionPack = Copy-LocalFixture 'decimal-version'
+[System.IO.File]::WriteAllText((Join-Path $decimalVersionPack 'pack.mcmeta'), @'
+{
+  "pack": {
+    "min_format": [88.4, 0.4],
+    "max_format": [88.4, 0.4],
+    "description": "deliberately decimal version"
+  }
+}
+'@, $utf8NoBom)
+Invoke-ExpectedFailure 'decimal full-version elements' {
+    & $validator -ArchivePath $ArchivePath -LocalTestPackPath $decimalVersionPack
+}
+
 $duplicateZip = Join-Path $fixtureRoot 'duplicate-entry.zip'
 Copy-Item -LiteralPath $ArchivePath -Destination $duplicateZip -Force
 $archive = [System.IO.Compression.ZipFile]::Open($duplicateZip, [System.IO.Compression.ZipArchiveMode]::Update)

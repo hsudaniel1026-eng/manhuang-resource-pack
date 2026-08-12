@@ -72,7 +72,20 @@ function Test-FullPackVersion {
     param($Value)
 
     $values = @($Value)
-    return $values.Count -eq 2 -and [int]$values[0] -eq $requiredPackVersion[0] -and [int]$values[1] -eq $requiredPackVersion[1]
+    if ($values.Count -ne 2) {
+        return $false
+    }
+
+    $integerTypes = @(
+        [sbyte], [byte], [int16], [uint16], [int32], [uint32], [int64], [uint64]
+    )
+    foreach ($valuePart in $values) {
+        if ($null -eq $valuePart -or -not ($integerTypes | Where-Object { $valuePart.GetType() -eq $_ })) {
+            return $false
+        }
+    }
+
+    return $values[0] -eq $requiredPackVersion[0] -and $values[1] -eq $requiredPackVersion[1]
 }
 
 $failures = [System.Collections.Generic.List[string]]::new()
