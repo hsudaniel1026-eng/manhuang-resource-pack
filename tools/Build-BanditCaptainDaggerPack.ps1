@@ -4,7 +4,8 @@ param(
     [string]$BuildRoot = 'C:\Users\User\Documents\26.2\build',
     [string]$SourceModelPath,
     [string]$SourceTexturePath = 'D:\Users\User\Downloads\assets\minecraft\textures\item\cybernetic_knife.png',
-    [string]$LocalTestPackPath
+    [string]$LocalTestPackPath,
+    [switch]$ValidateLocalTestPackPathOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -97,8 +98,10 @@ if ([string]::IsNullOrWhiteSpace($ArchivePath)) {
 if ([string]::IsNullOrWhiteSpace($SourceModelPath)) {
     $SourceModelPath = Join-Path 'D:\Users\User\Downloads\assets\minecraft\models\item' ("$([char]0x5315)$([char]0x9996)4.json")
 }
+$localTestPackName = "$([char]0x883B)$([char]0x8352)$([char]0x9006)$([char]0x5883)-$([char]0x76DC)$([char]0x8CCA)$([char]0x982D)$([char]0x76EE)$([char]0x6750)$([char]0x8CEA)$([char]0x6E2C)$([char]0x8A66)"
+$localTestPackParent = 'C:\Users\User\curseforge\minecraft\Instances\26.2\resourcepacks'
 if ([string]::IsNullOrWhiteSpace($LocalTestPackPath)) {
-    $LocalTestPackPath = Join-Path 'C:\Users\User\curseforge\minecraft\Instances\26.2\resourcepacks' ("$([char]0x883B)$([char]0x8352)$([char]0x9006)$([char]0x5883)-$([char]0x76DC)$([char]0x8CCA)$([char]0x982D)$([char]0x76EE)$([char]0x6750)$([char]0x8CEA)$([char]0x6E2C)$([char]0x8A66)")
+    $LocalTestPackPath = Join-Path $localTestPackParent $localTestPackName
 }
 
 function Get-CanonicalPath {
@@ -123,13 +126,90 @@ function Test-SamePath {
     return [string]::Equals($Left, $Right, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Assert-NoReparsePointComponent {
+    param([Parameter(Mandatory)] [string]$Path)
+
+    $current = [System.IO.Path]::GetFullPath($Path)
+    while (-not [string]::IsNullOrWhiteSpace($current)) {
+        if (Test-Path -LiteralPath $current) {
+            $item = Get-Item -LiteralPath $current -Force
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or $null -ne $item.LinkType) {
+                throw "Refusing unsafe LocalTestPackPath: path contains a link or reparse-point component: $current"
+            }
+        }
+
+        $parentInfo = [System.IO.Directory]::GetParent($current)
+        if ($null -eq $parentInfo -or (Test-SamePath $parentInfo.FullName $current)) {
+            break
+        }
+        $current = $parentInfo.FullName
+    }
+}
+
+function Assert-SafeLocalTestPackPath {
+    param([Parameter(Mandatory)] [string]$Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $leaf = [System.IO.Path]::GetFileName($fullPath)
+    if (-not [string]::Equals($leaf, $localTestPackName, [System.StringComparison]::Ordinal)) {
+        throw "Refusing unsafe LocalTestPackPath: leaf must be exactly '$localTestPackName': $fullPath"
+    }
+
+    $parentPath = [System.IO.Path]::GetDirectoryName($fullPath)
+    if ([string]::IsNullOrWhiteSpace($parentPath) -or -not (Test-Path -LiteralPath $parentPath -PathType Container)) {
+        throw "Refusing unsafe LocalTestPackPath: the dedicated parent directory does not exist: $parentPath"
+    }
+    if (-not [string]::Equals([System.IO.Path]::GetFileName($parentPath), 'resourcepacks', [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals([System.IO.Path]::GetFileName([System.IO.Path]::GetDirectoryName($parentPath)), '26.2', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing unsafe LocalTestPackPath: target must be a direct child of the dedicated 26.2/resourcepacks directory: $fullPath"
+    }
+
+    Assert-NoReparsePointComponent $fullPath
+    Assert-NoReparsePointComponent $localTestPackParent
+
+    $actualParentCanonical = Get-CanonicalPath $parentPath
+    $expectedParentCanonical = Get-CanonicalPath $localTestPackParent
+    if (-not (Test-SamePath $actualParentCanonical $expectedParentCanonical)) {
+        throw "Refusing unsafe LocalTestPackPath: parent is not the dedicated resourcepacks directory: $parentPath"
+    }
+
+    $actualCanonical = Get-CanonicalPath $fullPath
+    $expectedCanonical = Get-CanonicalPath (Join-Path $localTestPackParent $localTestPackName)
+    if (-not (Test-SamePath $actualCanonical $expectedCanonical)) {
+        throw "Refusing unsafe LocalTestPackPath: resolved target is not the dedicated test pack: $fullPath"
+    }
+
+    if (Test-Path -LiteralPath $fullPath) {
+        $targetItem = Get-Item -LiteralPath $fullPath -Force
+        if (-not $targetItem.PSIsContainer) {
+            throw "Refusing unsafe LocalTestPackPath: existing target is not a directory: $fullPath"
+        }
+        if (($targetItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or $null -ne $targetItem.LinkType) {
+            throw "Refusing unsafe LocalTestPackPath: target is a link or reparse point: $fullPath"
+        }
+    }
+
+    return $fullPath
+}
+
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$deterministicEntryTimestamp = [System.DateTimeOffset]::new(2000, 1, 1, 0, 0, 0, [System.TimeSpan]::Zero)
+$LocalTestPackPath = Assert-SafeLocalTestPackPath $LocalTestPackPath
+if ($ValidateLocalTestPackPathOnly) {
+    Write-Host "PASS: LocalTestPackPath safety validation accepted the dedicated path: $LocalTestPackPath"
+    return
+}
+
 $stageRoot = Join-Path $BuildRoot 'bandit-captain-dagger'
 $stageAssetsRoot = Join-Path $stageRoot 'assets\bandit'
 $stageItemPath = Join-Path $stageAssetsRoot 'items\bandit_captain_dagger.json'
 $stageModelPath = Join-Path $stageAssetsRoot 'models\item\bandit_captain_dagger.json'
 $stageTexturePath = Join-Path $stageAssetsRoot 'textures\item\bandit_captain_dagger.png'
 $candidateZip = Join-Path $stageRoot 'manhuang-resource-pack.zip'
+$packMetadataPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'pack.mcmeta'
 
 $requiredEntries = @(
     'assets/bandit/items/bandit_captain_dagger.json',
@@ -137,7 +217,7 @@ $requiredEntries = @(
     'assets/bandit/textures/item/bandit_captain_dagger.png'
 )
 
-foreach ($path in @($ArchivePath, $SourceModelPath, $SourceTexturePath)) {
+foreach ($path in @($ArchivePath, $SourceModelPath, $SourceTexturePath, $packMetadataPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required source file is missing: $path"
     }
@@ -154,7 +234,9 @@ $localTestPackCanonical = Get-CanonicalPath $LocalTestPackPath
 if ((Test-SamePath $archiveCanonical $candidateCanonical) -or ((Test-Path -LiteralPath $candidateZip -PathType Leaf) -and ([BanditCaptainNativePath]::ExistingFileIdentity($ArchivePath) -eq [BanditCaptainNativePath]::ExistingFileIdentity($candidateZip)))) {
     throw 'Refusing to build because ArchivePath and candidateZip identify the same file.'
 }
-if ((Test-SamePath $localTestPackCanonical $archiveDirectoryCanonical) -or (Test-SamePath $localTestPackCanonical $worktreeCanonical) -or $localTestPackCanonical.StartsWith($worktreeCanonical + '\\', [System.StringComparison]::OrdinalIgnoreCase)) {
+if ((Test-SamePath $localTestPackCanonical $archiveDirectoryCanonical) -or
+    (Test-SamePath $localTestPackCanonical $worktreeCanonical) -or
+    $localTestPackCanonical.StartsWith($worktreeCanonical + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw 'Refusing to clear a local test-pack path that resolves inside the worktree or archive directory.'
 }
 
@@ -190,8 +272,15 @@ if (Test-Path -LiteralPath $candidateZip -PathType Leaf) {
 $sourceArchive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $ArchivePath))
 $candidateArchive = [System.IO.Compression.ZipFile]::Open($candidateZip, [System.IO.Compression.ZipArchiveMode]::Create)
 try {
+    $generatedFiles = [ordered]@{
+        'pack.mcmeta' = $packMetadataPath
+        'assets/bandit/items/bandit_captain_dagger.json' = $stageItemPath
+        'assets/bandit/models/item/bandit_captain_dagger.json' = $stageModelPath
+        'assets/bandit/textures/item/bandit_captain_dagger.png' = $stageTexturePath
+    }
+
     foreach ($entry in $sourceArchive.Entries) {
-        if ($requiredEntries -contains $entry.FullName) {
+        if ($generatedFiles.Contains($entry.FullName)) {
             continue
         }
         $destinationEntry = $candidateArchive.CreateEntry($entry.FullName, [System.IO.Compression.CompressionLevel]::Optimal)
@@ -206,13 +295,9 @@ try {
         }
     }
 
-    $generatedFiles = @{
-        'assets/bandit/items/bandit_captain_dagger.json' = $stageItemPath
-        'assets/bandit/models/item/bandit_captain_dagger.json' = $stageModelPath
-        'assets/bandit/textures/item/bandit_captain_dagger.png' = $stageTexturePath
-    }
-    foreach ($entryName in $requiredEntries) {
+    foreach ($entryName in $generatedFiles.Keys) {
         $destinationEntry = $candidateArchive.CreateEntry($entryName, [System.IO.Compression.CompressionLevel]::Optimal)
+        $destinationEntry.LastWriteTime = $deterministicEntryTimestamp
         $input = [System.IO.File]::OpenRead($generatedFiles[$entryName])
         $output = $destinationEntry.Open()
         try {
@@ -228,22 +313,11 @@ try {
 }
 
 if (Test-Path -LiteralPath $LocalTestPackPath) {
-    $localTestPackItem = Get-Item -LiteralPath $LocalTestPackPath -Force
-    if ($null -ne $localTestPackItem.LinkType) {
-        throw "Refusing to clear local test-pack link: $LocalTestPackPath"
-    }
+    $LocalTestPackPath = Assert-SafeLocalTestPackPath $LocalTestPackPath
     Remove-Item -LiteralPath $LocalTestPackPath -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $LocalTestPackPath | Out-Null
-[System.IO.File]::WriteAllText((Join-Path $LocalTestPackPath 'pack.mcmeta'), @'
-{
-  "pack": {
-    "min_format": [88, 0],
-    "max_format": [88, 0],
-    "description": "[manhuang] bandit captain dagger test"
-  }
-}
-'@, $utf8NoBom)
+Copy-Item -LiteralPath $packMetadataPath -Destination (Join-Path $LocalTestPackPath 'pack.mcmeta') -Force
 foreach ($entryName in $requiredEntries) {
     $destination = Join-Path $LocalTestPackPath ($entryName -replace '/', '\\')
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null

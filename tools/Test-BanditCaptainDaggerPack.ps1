@@ -33,6 +33,7 @@ $baselineHashes = @{
 }
 
 $requiredPackVersion = @(88, 0)
+$deterministicEntryTimestamp = [System.DateTimeOffset]::new(2000, 1, 1, 0, 0, 0, [System.TimeSpan]::Zero)
 
 function Get-EntryBytes {
     param([System.IO.Compression.ZipArchiveEntry]$Entry)
@@ -88,6 +89,31 @@ function Test-FullPackVersion {
     return $values[0] -eq $requiredPackVersion[0] -and $values[1] -eq $requiredPackVersion[1]
 }
 
+function Test-PackMetadata {
+    param(
+        $Metadata,
+        [Parameter(Mandatory)] [string]$Label
+    )
+
+    if ($null -eq $Metadata.pack) {
+        Add-Failure "$Label pack.mcmeta is missing the pack object"
+        return
+    }
+
+    $packProperties = @($Metadata.pack.PSObject.Properties.Name)
+    if (-not ($packProperties -contains 'min_format') -or -not (Test-FullPackVersion $Metadata.pack.min_format)) {
+        Add-Failure "$Label min_format must be [88, 0] for Minecraft 26.2"
+    }
+    if (-not ($packProperties -contains 'max_format') -or -not (Test-FullPackVersion $Metadata.pack.max_format)) {
+        Add-Failure "$Label max_format must be [88, 0] for Minecraft 26.2"
+    }
+    foreach ($legacyField in @('pack_format', 'supported_formats')) {
+        if ($packProperties -contains $legacyField) {
+            Add-Failure "$Label uses obsolete $legacyField instead of 26.2 min_format/max_format"
+        }
+    }
+}
+
 $failures = [System.Collections.Generic.List[string]]::new()
 $requiredArchiveHashes = @{}
 
@@ -121,6 +147,13 @@ if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
 
         if (-not $entries.ContainsKey('pack.mcmeta')) {
             Add-Failure 'ZIP root is missing pack.mcmeta'
+        } else {
+            try {
+                $zipPackMetadata = [System.Text.Encoding]::UTF8.GetString((Get-EntryBytes $entries['pack.mcmeta'])) | ConvertFrom-Json
+                Test-PackMetadata $zipPackMetadata 'ZIP pack.mcmeta'
+            } catch {
+                Add-Failure "ZIP pack.mcmeta is not valid JSON: $($_.Exception.Message)"
+            }
         }
         if (-not ($entries.Keys | Where-Object { $_.StartsWith('assets/') })) {
             Add-Failure 'ZIP root is missing assets/'
@@ -131,6 +164,15 @@ if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
                 Add-Failure "Missing required ZIP entry: $requiredEntry"
             } else {
                 $requiredArchiveHashes[$requiredEntry] = Get-BytesHash (Get-EntryBytes $entries[$requiredEntry])
+                $entryTimestamp = $entries[$requiredEntry].LastWriteTime
+                if ($entryTimestamp.Year -ne $deterministicEntryTimestamp.Year -or
+                    $entryTimestamp.Month -ne $deterministicEntryTimestamp.Month -or
+                    $entryTimestamp.Day -ne $deterministicEntryTimestamp.Day -or
+                    $entryTimestamp.Hour -ne $deterministicEntryTimestamp.Hour -or
+                    $entryTimestamp.Minute -ne $deterministicEntryTimestamp.Minute -or
+                    $entryTimestamp.Second -ne $deterministicEntryTimestamp.Second) {
+                    Add-Failure "Generated ZIP entry timestamp is not deterministic for ${requiredEntry}: $entryTimestamp"
+                }
             }
         }
 
@@ -191,22 +233,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $LocalTestPackPath 'pack.mcmeta') -P
 } else {
     try {
         $localPackMetadata = Get-Content -Raw -Encoding utf8 -LiteralPath (Join-Path $LocalTestPackPath 'pack.mcmeta') | ConvertFrom-Json
-        if ($null -eq $localPackMetadata.pack) {
-            Add-Failure 'Local test pack pack.mcmeta is missing the pack object'
-        } else {
-            $packProperties = @($localPackMetadata.pack.PSObject.Properties.Name)
-            if (-not ($packProperties -contains 'min_format') -or -not (Test-FullPackVersion $localPackMetadata.pack.min_format)) {
-                Add-Failure 'Local test pack min_format must be [88, 0] for Minecraft 26.2'
-            }
-            if (-not ($packProperties -contains 'max_format') -or -not (Test-FullPackVersion $localPackMetadata.pack.max_format)) {
-                Add-Failure 'Local test pack max_format must be [88, 0] for Minecraft 26.2'
-            }
-            foreach ($legacyField in @('pack_format', 'supported_formats')) {
-                if ($packProperties -contains $legacyField) {
-                    Add-Failure "Local test pack uses obsolete $legacyField instead of 26.2 min_format/max_format"
-                }
-            }
-        }
+        Test-PackMetadata $localPackMetadata 'Local test pack pack.mcmeta'
     } catch {
         Add-Failure "Local test pack pack.mcmeta is not valid JSON: $($_.Exception.Message)"
     }

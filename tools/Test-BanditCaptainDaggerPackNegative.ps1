@@ -93,6 +93,37 @@ Invoke-ExpectedFailure 'decimal full-version elements' {
     & $validator -ArchivePath $ArchivePath -LocalTestPackPath $decimalVersionPack
 }
 
+$obsoleteMetadataZip = Join-Path $fixtureRoot 'obsolete-zip-metadata.zip'
+Copy-Item -LiteralPath $ArchivePath -Destination $obsoleteMetadataZip -Force
+$archive = [System.IO.Compression.ZipFile]::Open($obsoleteMetadataZip, [System.IO.Compression.ZipArchiveMode]::Update)
+try {
+    $existingMetadata = $archive.GetEntry('pack.mcmeta')
+    if ($null -eq $existingMetadata) {
+        throw 'Fixture archive is missing pack.mcmeta'
+    }
+    $existingMetadata.Delete()
+    $replacementMetadata = $archive.CreateEntry('pack.mcmeta')
+    $writer = [System.IO.StreamWriter]::new($replacementMetadata.Open(), $utf8NoBom)
+    try {
+        $writer.Write(@'
+{
+  "pack": {
+    "pack_format": 15,
+    "supported_formats": [15, 32767],
+    "description": "deliberately obsolete ZIP metadata"
+  }
+}
+'@)
+    } finally {
+        $writer.Dispose()
+    }
+} finally {
+    $archive.Dispose()
+}
+Invoke-ExpectedFailure 'obsolete ZIP pack.mcmeta format' {
+    & $validator -ArchivePath $obsoleteMetadataZip -LocalTestPackPath $LocalTestPackPath
+}
+
 $duplicateZip = Join-Path $fixtureRoot 'duplicate-entry.zip'
 Copy-Item -LiteralPath $ArchivePath -Destination $duplicateZip -Force
 $archive = [System.IO.Compression.ZipFile]::Open($duplicateZip, [System.IO.Compression.ZipArchiveMode]::Update)
